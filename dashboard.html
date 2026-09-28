@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI Boss Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#0B0B0C;--paper:#F7F6F3;--blue:#0071E3;--line:#DEDBD3;--card:#FFFFFF;--muted:#6B6862;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:'Inter',sans-serif;}
+.wrap{max-width:640px;margin:0 auto;padding:24px 18px 60px;}
+h1{font-family:'Fraunces',serif;font-weight:600;font-size:24px;margin:0 0 4px;}
+.sub{color:var(--muted);font-size:13px;margin:0 0 20px;}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:16px;margin-bottom:16px;}
+.statsbar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
+.stat{flex:1;min-width:75px;background:var(--paper);border:1px solid var(--line);border-radius:3px;padding:8px 4px;text-align:center;}
+.stat .num{font-family:'IBM Plex Mono',monospace;font-size:17px;font-weight:600;display:block;}
+.stat .lbl{font-size:10px;color:var(--muted);}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;}
+input,select{width:100%;border:1px solid var(--line);border-radius:3px;padding:8px 9px;font-size:14px;background:#fff;color:var(--ink);}
+.qitem{padding:10px 0;border-bottom:1px solid var(--line);}
+.qitem:last-child{border-bottom:none;}
+.qtop{display:flex;justify-content:space-between;gap:8px;}
+.qmeta{color:var(--muted);font-size:12px;display:block;margin-top:2px;}
+.pill{font-size:10px;padding:2px 9px;border-radius:20px;font-family:'IBM Plex Mono',monospace;white-space:nowrap;height:fit-content;}
+.pill.routed{background:#EAF3FE;color:var(--blue);}
+.pill.pending-review{background:#FFF8E8;color:#B8860B;}
+.pill.sent{background:#E9F7EE;color:#1E8E3E;}
+.pill.rejected{background:#FBEAEA;color:#B3261E;}
+.returning{font-size:10px;color:var(--blue);border:1px solid var(--blue);border-radius:20px;padding:1px 7px;margin-left:6px;}
+.aging{font-size:10px;color:#B8860B;font-family:'IBM Plex Mono',monospace;display:block;margin-top:2px;}
+.qactions{display:flex;gap:6px;margin-top:6px;}
+.qbtn{font-size:11px;padding:3px 9px;border-radius:3px;border:1px solid var(--line);background:transparent;cursor:pointer;}
+.qbtn:hover{border-color:var(--blue);color:var(--blue);}
+.qbtn.danger:hover{border-color:#B3261E;color:#B3261E;}
+.noteInput{margin-top:6px;font-size:12px;padding:5px 8px;}
+.empty{color:var(--muted);font-size:13px;text-align:center;padding:20px 0;}
+.status-line{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);margin-bottom:14px;}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#1E8E3E;margin-right:5px;}
+.dot.off{background:#B3261E;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AI Boss Dashboard</h1>
+  <p class="sub">Live queue — pulled directly from this backend's /tasks endpoint.</p>
+  <div class="status-line"><span class="dot" id="statusDot"></span><span id="statusText">Connecting…</span></div>
+
+  <div class="panel">
+    <input id="newTaskText" placeholder="Describe the inquiry (e.g. 4 people, Ladakh, wants a quote)">
+    <div class="grid2" style="margin-top:8px;">
+      <input id="newTaskPhone" placeholder="Customer phone/email (optional)">
+      <button class="qbtn" style="width:100%;" onclick="addTask()">+ Add task</button>
+    </div>
+  </div>
+
+  <div class="panel" id="devPanel">
+    <div class="grid2">
+      <button class="qbtn" onclick="seedData()">Load sample data</button>
+      <button class="qbtn danger" onclick="clearAll()">Clear all tasks</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="statsbar" id="statsBar"></div>
+    <div class="grid2">
+      <input id="q" placeholder="Search..." oninput="render()">
+      <select id="f" onchange="render()">
+        <option value="All">All statuses</option>
+        <option>Routed</option>
+        <option value="Pending Review">Pending Review</option>
+        <option>Sent</option>
+        <option>Rejected</option>
+      </select>
+    </div>
+    <div id="list"></div>
+  </div>
+</div>
+
+<script>
+let tasks = [];
+
+async function fetchTasks(){
+  try{
+    const res = await fetch('/tasks');
+    if(!res.ok) throw new Error();
+    tasks = await res.json();
+    document.getElementById('statusDot').classList.remove('off');
+    document.getElementById('statusText').textContent = 'Connected — refreshing every 5s';
+    render();
+  } catch(e){
+    document.getElementById('statusDot').classList.add('off');
+    document.getElementById('statusText').textContent = 'Could not reach backend';
+  }
+}
+
+async function patchTask(id, body){
+  await fetch('/tasks/'+id, {
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  fetchTasks();
+}
+
+async function addTask(){
+  const text = document.getElementById('newTaskText').value.trim();
+  if(!text) return;
+  const phone = document.getElementById('newTaskPhone').value.trim();
+  await fetch('/tasks', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({text, customer_key: phone || null})
+  });
+  document.getElementById('newTaskText').value = '';
+  document.getElementById('newTaskPhone').value = '';
+  fetchTasks();
+}
+
+async function seedData(){
+  await fetch('/tasks/seed', {method:'POST'});
+  fetchTasks();
+}
+
+async function clearAll(){
+  if(!confirm('Delete all tasks? This cannot be undone.')) return;
+  await fetch('/tasks', {method:'DELETE'});
+  fetchTasks();
+}
+
+function agoText(iso){
+  const mins = Math.floor((Date.now() - new Date(iso).getTime())/60000);
+  return mins < 1 ? 'waiting <1m' : 'waiting '+mins+'m';
+}
+
+function renderStats(){
+  const bar = document.getElementById('statsBar');
+  const count = s => tasks.filter(t=>t.status===s).length;
+  bar.innerHTML = [
+    ['Pending Review', count('Pending Review')],
+    ['Sent', count('Sent')],
+    ['Rejected', count('Rejected')],
+    ['Total', tasks.length]
+  ].map(([l,n])=>`<div class="stat"><span class="num">${n}</span><span class="lbl">${l}</span></div>`).join('');
+}
+
+function render(){
+  renderStats();
+  const q = document.getElementById('q').value.toLowerCase();
+  const f = document.getElementById('f').value;
+  const list = document.getElementById('list');
+  const filtered = tasks.filter(t=>{
+    const matchesText = !q || (t.source+t.agent+t.preview).toLowerCase().includes(q);
+    const matchesStatus = f==='All' || t.status===f;
+    return matchesText && matchesStatus;
+  });
+  if(tasks.length===0){ list.innerHTML = '<div class="empty">No tasks yet — send a test webhook to see one appear here.</div>'; return; }
+  if(filtered.length===0){ list.innerHTML = '<div class="empty">No matches.</div>'; return; }
+  list.innerHTML = filtered.map(t=>{
+    let actions = '';
+    if(t.status==='Pending Review'){
+      actions = `<div class="qactions">
+        <button class="qbtn" onclick="patchTask(${t.id},{status:'Sent'})">Approve &amp; Send</button>
+        <button class="qbtn danger" onclick="patchTask(${t.id},{status:'Rejected'})">Reject</button>
+      </div>`;
+    } else if(t.status==='Rejected'){
+      actions = `<div class="qactions"><button class="qbtn" onclick="patchTask(${t.id},{status:'Pending Review'})">Reopen</button></div>`;
+    } else if(t.status==='Routed'){
+      actions = `<div class="qactions"><button class="qbtn" onclick="patchTask(${t.id},{status:'Pending Review'})">Move to review</button></div>`;
+    }
+    const aging = t.status==='Pending Review' ? `<span class="aging">${agoText(t.created_at)}</span>` : '';
+    const returning = t.is_returning ? `<span class="returning">Returning customer</span>` : '';
+    return `<div class="qitem">
+      <div class="qtop">
+        <span>${t.source} → <strong>${t.agent}</strong>${returning}<span class="qmeta">${t.preview}</span>${aging}</span>
+        <span class="pill ${t.status.toLowerCase().replace(/ /g,'-')}">${t.status}</span>
+      </div>
+      ${actions}
+      <input class="noteInput" placeholder="Add admin note..." value="${t.notes||''}" onblur="patchTask(${t.id},{notes:this.value})">
+    </div>`;
+  }).join('');
+}
+
+fetchTasks();
+setInterval(fetchTasks, 5000);
+</script>
+</body>
+</html>
